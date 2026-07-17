@@ -11,6 +11,7 @@ class ThreeJSContainer {
     private ballMesh!: THREE.Mesh;
     private ballBody!: CANNON.Body;
     private batGroup!: THREE.Group;
+    private batMesh!: THREE.Mesh;
     private batBody!: CANNON.Body;
     private groundBody!: CANNON.Body;
     private statusElement!: HTMLDivElement;
@@ -19,7 +20,10 @@ class ThreeJSContainer {
     private readonly clock = new THREE.Clock();
     private readonly pitchStart = new THREE.Vector3(0, 1.25, -18);
     private readonly batPivot = new THREE.Vector3(-1.2, 1.15, 0.15);
-    private readonly guiObj = { pitchSpeed: 110 };
+    private readonly guiObj = {
+        pitchSpeed: 110,
+        battingSide: "右打席"
+    };
 
     private ballState: BallState = "ready";
     private swingActive = false;
@@ -126,9 +130,22 @@ class ThreeJSContainer {
         this.groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
         this.world.addBody(this.groundBody);
 
-        // 投球方向と飛距離が分かりやすい目盛り線
+        // ホームベースから外野方向へ伸びる一塁線・三塁線
+        const foulLineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
+        const firstBaseLine = [
+            new THREE.Vector3(0, 0.03, 0.45),
+            new THREE.Vector3(-42, 0.03, -41.55)
+        ];
+        const thirdBaseLine = [
+            new THREE.Vector3(0, 0.03, 0.45),
+            new THREE.Vector3(42, 0.03, -41.55)
+        ];
+        this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(firstBaseLine), foulLineMaterial));
+        this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(thirdBaseLine), foulLineMaterial));
+
+        // ホームベースの前（外野側）に飛距離の目盛り線を表示
         const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 });
-        for (let z = 10; z <= 50; z += 10) {
+        for (let z = -10; z >= -50; z -= 10) {
             const points = [new THREE.Vector3(-8, 0.025, z), new THREE.Vector3(8, 0.025, z)];
             this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), lineMaterial));
         }
@@ -162,14 +179,14 @@ class ThreeJSContainer {
         this.batGroup = new THREE.Group();
         this.batGroup.position.copy(this.batPivot);
 
-        const batMesh = new THREE.Mesh(
+        this.batMesh = new THREE.Mesh(
             new THREE.CylinderGeometry(0.075, 0.14, 2.4, 20),
             new THREE.MeshPhongMaterial({ color: 0xd69b55, shininess: 80 })
         );
-        batMesh.rotation.z = Math.PI / 2;
-        batMesh.position.x = 1.2;
-        batMesh.castShadow = true;
-        this.batGroup.add(batMesh);
+        this.batMesh.rotation.z = Math.PI / 2;
+        this.batMesh.position.x = 1.2;
+        this.batMesh.castShadow = true;
+        this.batGroup.add(this.batMesh);
         this.scene.add(this.batGroup);
 
         // 衝突判定はバットに近い細長い直方体で安定させる
@@ -185,6 +202,9 @@ class ThreeJSContainer {
     private createGUI = () => {
         const gui = new GUI({ title: "投球設定" });
         gui.add(this.guiObj, "pitchSpeed", 60, 160, 1).name("球速 (km/h)");
+        gui.add(this.guiObj, "battingSide", ["右打席", "左打席"])
+            .name("打席")
+            .onChange(() => this.changeBattingSide());
     };
 
     private createInformationPanel = () => {
@@ -246,13 +266,24 @@ class ThreeJSContainer {
     };
 
     private setBatAngle = (angleDegree: number) => {
-        const angle = THREE.MathUtils.degToRad(angleDegree);
+        const sideSign = this.guiObj.battingSide === "右打席" ? 1 : -1;
+        const angle = THREE.MathUtils.degToRad(angleDegree * sideSign);
+        this.batPivot.x = -1.2 * sideSign;
         this.batGroup.rotation.y = angle;
+        this.batGroup.position.copy(this.batPivot);
+        this.batMesh.position.x = 1.2 * sideSign;
 
-        const offset = new THREE.Vector3(1.2, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+        const offset = new THREE.Vector3(1.2 * sideSign, 0, 0)
+            .applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
         const center = this.batPivot.clone().add(offset);
         this.batBody.position.set(center.x, center.y, center.z);
         this.batBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), angle);
+    };
+
+    private changeBattingSide = () => {
+        this.swingActive = false;
+        this.setBatAngle(-65);
+        this.statusElement.textContent = `${this.guiObj.battingSide}に変更しました`;
     };
 
     private updateSwing = (delta: number) => {
@@ -276,12 +307,12 @@ class ThreeJSContainer {
 
         // 当たった瞬間のバット角度から左右方向を決める
         const batAngle = this.batGroup.rotation.y;
-        const sideDirection = THREE.MathUtils.clamp(Math.sin(batAngle) * 0.45, -0.45, 0.45);
+        const sideDirection = THREE.MathUtils.clamp(Math.sin(batAngle) * 0.35, -0.35, 0.35);
         const exitSpeed = 18 + this.guiObj.pitchSpeed * 0.035;
         this.ballBody.velocity.set(
             sideDirection * exitSpeed,
             exitSpeed * 0.62,
-            exitSpeed * 0.78
+            -exitSpeed * 0.78
         );
         this.statusElement.textContent = "ヒット！ 打球を追跡中…";
     };
