@@ -29,6 +29,7 @@ class ThreeJSContainer {
     private swingActive = false;
     private swingTime = 0;
     private hitPosition = new THREE.Vector3();
+    private pendingHitVelocity: CANNON.Vec3 | null = null;
 
     public createRendererDOM = (width: number, height: number, cameraPos: THREE.Vector3) => {
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -64,7 +65,7 @@ class ThreeJSContainer {
 
     private createScene = () => {
         this.scene = new THREE.Scene();
-        this.scene.fog = new THREE.Fog(0x87ceeb, 45, 95);
+        this.scene.fog = new THREE.Fog(0x87ceeb, 100, 220);
 
         this.world = new CANNON.World({
             gravity: new CANNON.Vec3(0, -9.82, 0)
@@ -95,7 +96,7 @@ class ThreeJSContainer {
 
     private createField = () => {
         const groundMesh = new THREE.Mesh(
-            new THREE.CircleGeometry(55, 96),
+            new THREE.CircleGeometry(140, 128),
             new THREE.MeshPhongMaterial({ color: 0x3e8f43 })
         );
         groundMesh.rotation.x = -Math.PI / 2;
@@ -134,18 +135,18 @@ class ThreeJSContainer {
         const foulLineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
         const firstBaseLine = [
             new THREE.Vector3(0, 0.03, 0.45),
-            new THREE.Vector3(-42, 0.03, -41.55)
+            new THREE.Vector3(-120, 0.03, -119.55)
         ];
         const thirdBaseLine = [
             new THREE.Vector3(0, 0.03, 0.45),
-            new THREE.Vector3(42, 0.03, -41.55)
+            new THREE.Vector3(120, 0.03, -119.55)
         ];
         this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(firstBaseLine), foulLineMaterial));
         this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(thirdBaseLine), foulLineMaterial));
 
         // ホームベースの前（外野側）に飛距離の目盛り線を表示
         const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 });
-        for (let z = -10; z >= -50; z -= 10) {
+        for (let z = -10; z >= -120; z -= 10) {
             const points = [new THREE.Vector3(-8, 0.025, z), new THREE.Vector3(8, 0.025, z)];
             this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), lineMaterial));
         }
@@ -195,6 +196,8 @@ class ThreeJSContainer {
             type: CANNON.Body.KINEMATIC,
             shape: new CANNON.Box(new CANNON.Vec3(1.2, 0.12, 0.12))
         });
+        // 接触検出だけを使い、物理エンジンによる反対方向への押し返しを防ぐ
+        this.batBody.collisionResponse = false;
         this.world.addBody(this.batBody);
         this.setBatAngle(-65);
     };
@@ -272,6 +275,8 @@ class ThreeJSContainer {
         this.batGroup.rotation.y = angle;
         this.batGroup.position.copy(this.batPivot);
         this.batMesh.position.x = 1.2 * sideSign;
+        // 左打席ではバットの太い先端がボール側を向くように反転する
+        this.batMesh.rotation.z = (Math.PI / 2) * sideSign;
 
         const offset = new THREE.Vector3(1.2 * sideSign, 0, 0)
             .applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
@@ -308,20 +313,30 @@ class ThreeJSContainer {
         // 当たった瞬間のバット角度から左右方向を決める
         const batAngle = this.batGroup.rotation.y;
         const sideDirection = THREE.MathUtils.clamp(Math.sin(batAngle) * 0.35, -0.35, 0.35);
-        const exitSpeed = 18 + this.guiObj.pitchSpeed * 0.035;
-        this.ballBody.velocity.set(
+        const exitSpeed = 26 + this.guiObj.pitchSpeed * 0.05;
+        this.pendingHitVelocity = new CANNON.Vec3(
             sideDirection * exitSpeed,
             exitSpeed * 0.62,
             -exitSpeed * 0.78
         );
-        this.statusElement.textContent = "ヒット！ 打球を追跡中…";
+        this.statusElement.textContent = "打球を追跡中…";
     };
 
     private finishHit = () => {
         this.ballState = "finished";
         const landing = new THREE.Vector3(this.ballBody.position.x, 0, this.ballBody.position.z);
         const distance = landing.distanceTo(this.hitPosition);
-        this.statusElement.textContent = distance >= 35 ? "ホームラン！" : "打球が着地しました";
+        const forwardDistance = this.hitPosition.z - landing.z;
+        const lateralDistance = Math.abs(landing.x - this.hitPosition.x);
+        const isFair = forwardDistance > 0 && lateralDistance <= forwardDistance;
+
+        if (!isFair) {
+            this.statusElement.textContent = "ファウル";
+        } else if (distance >= 100) {
+            this.statusElement.textContent = "ホームラン！";
+        } else {
+            this.statusElement.textContent = "ヒット！";
+        }
         this.distanceElement.textContent = `飛距離：${distance.toFixed(1)} m`;
     };
 
@@ -331,6 +346,7 @@ class ThreeJSContainer {
         this.ballBody.velocity.setZero();
         this.ballBody.angularVelocity.setZero();
         this.ballBody.force.setZero();
+        this.pendingHitVelocity = null;
         this.ballBody.wakeUp();
         this.swingActive = false;
         this.setBatAngle(-65);
@@ -350,6 +366,12 @@ class ThreeJSContainer {
         }
 
         this.world.step(1 / 60, delta, 4);
+
+        // 衝突ソルバーの計算後に打球速度を設定し、必ず外野方向へ飛ばす
+        if (this.pendingHitVelocity !== null) {
+            this.ballBody.velocity.copy(this.pendingHitVelocity);
+            this.pendingHitVelocity = null;
+        }
         this.ballMesh.position.set(
             this.ballBody.position.x,
             this.ballBody.position.y,
