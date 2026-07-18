@@ -17,17 +17,17 @@ export class Field {
         world.addBody(this.groundBody);
     }
 
-    public getGroundBody = (): CANNON.Body => {
+    public getGroundBody = () => {
         return this.groundBody;
     };
 
-    public isFair = (hitPosition: THREE.Vector3, landingPosition: THREE.Vector3): boolean => {
+    public isFair = (hitPosition: THREE.Vector3, landingPosition: THREE.Vector3) => {
         const forwardDistance = hitPosition.z - landingPosition.z;
         const lateralDistance = Math.abs(landingPosition.x - hitPosition.x);
         return forwardDistance > 0 && lateralDistance <= forwardDistance;
     };
 
-    private createGround = (scene: THREE.Scene): void => {
+    private createGround = (scene: THREE.Scene) => {
         const groundMesh = new THREE.Mesh(
             new THREE.CircleGeometry(140, 128),
             new THREE.MeshPhongMaterial({ color: 0x3e8f43 })
@@ -37,7 +37,7 @@ export class Field {
         scene.add(groundMesh);
     };
 
-    private createInfield = (scene: THREE.Scene): void => {
+    private createInfield = (scene: THREE.Scene) => {
         const dirtMesh = new THREE.Mesh(
             new THREE.CircleGeometry(9, 64),
             new THREE.MeshPhongMaterial({ color: 0xb98752 })
@@ -47,7 +47,7 @@ export class Field {
         scene.add(dirtMesh);
     };
 
-    private createHomePlate = (scene: THREE.Scene): void => {
+    private createHomePlate = (scene: THREE.Scene) => {
         const plateShape = new THREE.Shape();
         plateShape.moveTo(-0.43, 0.22);
         plateShape.lineTo(0.43, 0.22);
@@ -65,7 +65,7 @@ export class Field {
         scene.add(plate);
     };
 
-    private createFoulLines = (scene: THREE.Scene): void => {
+    private createFoulLines = (scene: THREE.Scene) => {
         const material = new THREE.LineBasicMaterial({ color: 0xffffff });
         const home = new THREE.Vector3(0, 0.03, 0.45);
         const firstBaseLine = [home, new THREE.Vector3(-120, 0.03, -119.55)];
@@ -81,7 +81,7 @@ export class Field {
         ));
     };
 
-    private createDistanceLines = (scene: THREE.Scene): void => {
+    private createDistanceLines = (scene: THREE.Scene) => {
         const material = new THREE.LineBasicMaterial({
             color: 0xffffff,
             transparent: true,

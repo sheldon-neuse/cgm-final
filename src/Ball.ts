@@ -24,11 +24,11 @@ export class Ball {
         this.reset();
     }
 
-    public getBody = (): CANNON.Body => {
+    public getBody = () => {
         return this.body;
     };
 
-    public getPosition = (): THREE.Vector3 => {
+    public getPosition = () => {
         return new THREE.Vector3(
             this.body.position.x,
             this.body.position.y,
@@ -36,24 +36,23 @@ export class Ball {
         );
     };
 
-    public pitch = (speedKmh: number): void => {
+    public pitch = (speedKmh: number) => {
         this.body.velocity.set(0, 0, speedKmh / 3.6);
         this.body.wakeUp();
     };
 
-    public queueHitVelocity = (velocity: CANNON.Vec3): void => {
-        // world.step後に設定することで、衝突ソルバーによる上書きを防ぐ
+    public queueHitVelocity = (velocity: CANNON.Vec3) => {
         this.pendingVelocity = velocity.clone();
     };
 
-    public cancelGravity = (): void => {
+    public cancelGravity = () => {
         this.body.applyForce(
             new CANNON.Vec3(0, 9.82 * this.body.mass, 0),
             this.body.position
         );
     };
 
-    public afterPhysicsStep = (): void => {
+    public afterPhysicsStep = () => {
         if (this.pendingVelocity !== null) {
             this.body.velocity.copy(this.pendingVelocity);
             this.pendingVelocity = null;
@@ -61,7 +60,7 @@ export class Ball {
         this.syncMesh();
     };
 
-    public reset = (): void => {
+    public reset = () => {
         this.body.position.set(
             this.startPosition.x,
             this.startPosition.y,
@@ -75,7 +74,7 @@ export class Ball {
         this.syncMesh();
     };
 
-    private syncMesh = (): void => {
+    private syncMesh = () => {
         this.mesh.position.set(
             this.body.position.x,
             this.body.position.y,
