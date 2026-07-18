@@ -2,36 +2,35 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import * as CANNON from "cannon-es";
 import GUI from "lil-gui";
+import { Bat, type BattingSide } from "./Bat";
+import { Ball } from "./Ball";
+import { Field } from "./Field";
 
 type BallState = "ready" | "pitched" | "hit" | "finished";
 
 class ThreeJSContainer {
     private scene!: THREE.Scene;
     private world!: CANNON.World;
-    private ballMesh!: THREE.Mesh;
-    private ballBody!: CANNON.Body;
-    private batGroup!: THREE.Group;
-    private batMesh!: THREE.Mesh;
-    private batBody!: CANNON.Body;
-    private groundBody!: CANNON.Body;
+    private bat!: Bat;
+    private ball!: Ball;
+    private field!: Field;
     private statusElement!: HTMLDivElement;
     private distanceElement!: HTMLDivElement;
 
     private readonly clock = new THREE.Clock();
-    private readonly pitchStart = new THREE.Vector3(0, 1.25, -18);
-    private readonly batPivot = new THREE.Vector3(-1.2, 1.15, 0.15);
     private readonly guiObj = {
         pitchSpeed: 110,
-        battingSide: "右打席"
+        battingSide: "右打席" as BattingSide
     };
 
     private ballState: BallState = "ready";
-    private swingActive = false;
-    private swingTime = 0;
     private hitPosition = new THREE.Vector3();
-    private pendingHitVelocity: CANNON.Vec3 | null = null;
 
-    public createRendererDOM = (width: number, height: number, cameraPos: THREE.Vector3) => {
+    public createRendererDOM = (
+        width: number,
+        height: number,
+        cameraPos: THREE.Vector3
+    ): HTMLCanvasElement => {
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(width, height);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -41,19 +40,19 @@ class ThreeJSContainer {
         const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 1000);
         camera.position.copy(cameraPos);
 
-        const orbitControls = new OrbitControls(camera, renderer.domElement);
-        orbitControls.target.set(0, 1, 0);
-        orbitControls.enablePan = false;  // 平行移動は禁止
-        orbitControls.enableZoom = false; // 拡大・縮小は禁止
-        orbitControls.enableDamping = true;
-        orbitControls.update();
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 1, 0);
+        controls.enablePan = false;
+        controls.enableZoom = false;
+        controls.enableDamping = true;
+        controls.update();
 
         this.createScene();
 
         const render: FrameRequestCallback = () => {
             const delta = Math.min(this.clock.getDelta(), 0.05);
             this.update(delta);
-            orbitControls.update();
+            controls.update();
             renderer.render(this.scene, camera);
             requestAnimationFrame(render);
         };
@@ -63,7 +62,7 @@ class ThreeJSContainer {
         return renderer.domElement;
     };
 
-    private createScene = () => {
+    private createScene = (): void => {
         this.scene = new THREE.Scene();
         this.scene.fog = new THREE.Fog(0x87ceeb, 100, 220);
 
@@ -74,9 +73,10 @@ class ThreeJSContainer {
         this.world.defaultContactMaterial.restitution = 0.45;
 
         this.createLights();
-        this.createField();
-        this.createBall();
-        this.createBat();
+        this.field = new Field(this.scene, this.world);
+        this.ball = new Ball(this.scene, this.world);
+        this.bat = new Bat(this.scene, this.world, this.guiObj.battingSide);
+        this.setupCollisionEvents();
         this.createGUI();
         this.createInformationPanel();
 
@@ -84,7 +84,7 @@ class ThreeJSContainer {
         this.resetBall();
     };
 
-    private createLights = () => {
+    private createLights = (): void => {
         this.scene.add(new THREE.HemisphereLight(0xffffff, 0x3a5f32, 1.8));
 
         const light = new THREE.DirectionalLight(0xffffff, 2.2);
@@ -94,123 +94,35 @@ class ThreeJSContainer {
         this.scene.add(light);
     };
 
-    private createField = () => {
-        const groundMesh = new THREE.Mesh(
-            new THREE.CircleGeometry(140, 128),
-            new THREE.MeshPhongMaterial({ color: 0x3e8f43 })
-        );
-        groundMesh.rotation.x = -Math.PI / 2;
-        groundMesh.receiveShadow = true;
-        this.scene.add(groundMesh);
-
-        const dirtMesh = new THREE.Mesh(
-            new THREE.CircleGeometry(9, 64),
-            new THREE.MeshPhongMaterial({ color: 0xb98752 })
-        );
-        dirtMesh.rotation.x = -Math.PI / 2;
-        dirtMesh.position.y = 0.006;
-        this.scene.add(dirtMesh);
-
-        const plateShape = new THREE.Shape();
-        plateShape.moveTo(-0.43, 0.22);
-        plateShape.lineTo(0.43, 0.22);
-        plateShape.lineTo(0.43, -0.22);
-        plateShape.lineTo(0, -0.48);
-        plateShape.lineTo(-0.43, -0.22);
-        plateShape.closePath();
-        const plate = new THREE.Mesh(
-            new THREE.ShapeGeometry(plateShape),
-            new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
-        );
-        plate.rotation.x = -Math.PI / 2;
-        plate.position.set(0, 0.018, 0.45);
-        this.scene.add(plate);
-
-        this.groundBody = new CANNON.Body({ mass: 0 });
-        this.groundBody.addShape(new CANNON.Plane());
-        this.groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-        this.world.addBody(this.groundBody);
-
-        // ホームベースから外野方向へ伸びる一塁線・三塁線
-        const foulLineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
-        const firstBaseLine = [
-            new THREE.Vector3(0, 0.03, 0.45),
-            new THREE.Vector3(-120, 0.03, -119.55)
-        ];
-        const thirdBaseLine = [
-            new THREE.Vector3(0, 0.03, 0.45),
-            new THREE.Vector3(120, 0.03, -119.55)
-        ];
-        this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(firstBaseLine), foulLineMaterial));
-        this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(thirdBaseLine), foulLineMaterial));
-
-        // ホームベースの前（外野側）に飛距離の目盛り線を表示
-        const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 });
-        for (let z = -10; z >= -120; z -= 10) {
-            const points = [new THREE.Vector3(-8, 0.025, z), new THREE.Vector3(8, 0.025, z)];
-            this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), lineMaterial));
-        }
-    };
-
-    private createBall = () => {
-        this.ballMesh = new THREE.Mesh(
-            new THREE.SphereGeometry(0.12, 24, 16),
-            new THREE.MeshPhongMaterial({ color: 0xffffff })
-        );
-        this.ballMesh.castShadow = true;
-        this.scene.add(this.ballMesh);
-
-        this.ballBody = new CANNON.Body({
-            mass: 0.145,
-            shape: new CANNON.Sphere(0.12),
-            linearDamping: 0.001
-        });
-        this.ballBody.addEventListener("collide", (event: { body: CANNON.Body }) => {
-            if (event.body === this.batBody && this.ballState === "pitched") {
-                this.hitBall();
+    private setupCollisionEvents = (): void => {
+        this.ball.getBody().addEventListener(
+            "collide",
+            (event: { body: CANNON.Body }) => {
+                if (event.body === this.bat.getBody() && this.ballState === "pitched") {
+                    this.hitBall();
+                }
+                if (
+                    event.body === this.field.getGroundBody()
+                    && this.ballState === "hit"
+                ) {
+                    this.finishHit();
+                }
             }
-            if (event.body === this.groundBody && this.ballState === "hit") {
-                this.finishHit();
-            }
-        });
-        this.world.addBody(this.ballBody);
-    };
-
-    private createBat = () => {
-        this.batGroup = new THREE.Group();
-        this.batGroup.position.copy(this.batPivot);
-
-        this.batMesh = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.075, 0.14, 2.4, 20),
-            new THREE.MeshPhongMaterial({ color: 0xd69b55, shininess: 80 })
         );
-        this.batMesh.rotation.z = Math.PI / 2;
-        this.batMesh.position.x = 1.2;
-        this.batMesh.castShadow = true;
-        this.batGroup.add(this.batMesh);
-        this.scene.add(this.batGroup);
-
-        // 衝突判定はバットに近い細長い直方体で安定させる
-        this.batBody = new CANNON.Body({
-            mass: 0,
-            type: CANNON.Body.KINEMATIC,
-            shape: new CANNON.Box(new CANNON.Vec3(1.2, 0.12, 0.12))
-        });
-        // 接触検出だけを使い、物理エンジンによる反対方向への押し返しを防ぐ
-        this.batBody.collisionResponse = false;
-        this.world.addBody(this.batBody);
-        this.setBatAngle(-65);
     };
 
-    private createGUI = () => {
+    private createGUI = (): void => {
         const gui = new GUI({ title: "投球設定" });
         gui.add(this.guiObj, "pitchSpeed", 60, 160, 1).name("球速 (km/h)");
         gui.add(this.guiObj, "battingSide", ["右打席", "左打席"])
             .name("打席")
-            .onChange(() => this.changeBattingSide());
+            .onChange(() => {
+                this.bat.setBattingSide(this.guiObj.battingSide);
+                this.statusElement.textContent = `${this.guiObj.battingSide}に変更しました`;
+            });
     };
 
-    private createInformationPanel = () => {
+    private createInformationPanel = (): void => {
         const panel = document.createElement("div");
         panel.style.position = "fixed";
         panel.style.left = "18px";
@@ -237,7 +149,7 @@ class ThreeJSContainer {
         document.body.appendChild(panel);
     };
 
-    private onKeyDown = (event: KeyboardEvent) => {
+    private onKeyDown = (event: KeyboardEvent): void => {
         if (event.repeat) return;
 
         if (event.code === "Space") {
@@ -245,90 +157,49 @@ class ThreeJSContainer {
             this.pitchBall();
         } else if (event.code === "Enter") {
             event.preventDefault();
-            this.startSwing();
+            this.bat.swing();
         } else if (event.code === "KeyR") {
             this.resetBall();
         }
     };
 
-    private pitchBall = () => {
+    private pitchBall = (): void => {
         if (this.ballState !== "ready" && this.ballState !== "finished") return;
 
         this.resetBall();
         this.ballState = "pitched";
-        const speedMps = this.guiObj.pitchSpeed / 3.6;
-        this.ballBody.velocity.set(0, 0, speedMps);
+        this.ball.pitch(this.guiObj.pitchSpeed);
         this.statusElement.textContent = `${this.guiObj.pitchSpeed} km/h の直球を投げました`;
         this.distanceElement.textContent = "";
     };
 
-    private startSwing = () => {
-        if (this.swingActive) return;
-        this.swingActive = true;
-        this.swingTime = 0;
-    };
-
-    private setBatAngle = (angleDegree: number) => {
-        const sideSign = this.guiObj.battingSide === "右打席" ? 1 : -1;
-        const angle = THREE.MathUtils.degToRad(angleDegree * sideSign);
-        this.batPivot.x = -1.2 * sideSign;
-        this.batGroup.rotation.y = angle;
-        this.batGroup.position.copy(this.batPivot);
-        this.batMesh.position.x = 1.2 * sideSign;
-        // 左打席ではバットの太い先端がボール側を向くように反転する
-        this.batMesh.rotation.z = (Math.PI / 2) * sideSign;
-
-        const offset = new THREE.Vector3(1.2 * sideSign, 0, 0)
-            .applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
-        const center = this.batPivot.clone().add(offset);
-        this.batBody.position.set(center.x, center.y, center.z);
-        this.batBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), angle);
-    };
-
-    private changeBattingSide = () => {
-        this.swingActive = false;
-        this.setBatAngle(-65);
-        this.statusElement.textContent = `${this.guiObj.battingSide}に変更しました`;
-    };
-
-    private updateSwing = (delta: number) => {
-        if (!this.swingActive) return;
-
-        this.swingTime += delta;
-        const duration = 0.32;
-        const progress = Math.min(this.swingTime / duration, 1);
-        const eased = 1 - Math.pow(1 - progress, 3);
-        this.setBatAngle(THREE.MathUtils.lerp(-65, 100, eased));
-
-        if (progress >= 1) {
-            this.swingActive = false;
-            window.setTimeout(() => this.setBatAngle(-65), 250);
-        }
-    };
-
-    private hitBall = () => {
+    private hitBall = (): void => {
         this.ballState = "hit";
-        this.hitPosition.set(this.ballBody.position.x, 0, this.ballBody.position.z);
+        this.hitPosition = this.ball.getPosition();
+        this.hitPosition.y = 0;
 
-        // 当たった瞬間のバット角度から左右方向を決める
-        const batAngle = this.batGroup.rotation.y;
-        const sideDirection = THREE.MathUtils.clamp(Math.sin(batAngle) * 0.35, -0.35, 0.35);
+        const batAngle = this.bat.getAngleRadians();
+        const sideDirection = THREE.MathUtils.clamp(
+            Math.sin(batAngle) * 0.35,
+            -0.35,
+            0.35
+        );
         const exitSpeed = 26 + this.guiObj.pitchSpeed * 0.05;
-        this.pendingHitVelocity = new CANNON.Vec3(
+
+        this.ball.queueHitVelocity(new CANNON.Vec3(
             sideDirection * exitSpeed,
             exitSpeed * 0.62,
             -exitSpeed * 0.78
-        );
+        ));
         this.statusElement.textContent = "打球を追跡中…";
     };
 
-    private finishHit = () => {
+    private finishHit = (): void => {
         this.ballState = "finished";
-        const landing = new THREE.Vector3(this.ballBody.position.x, 0, this.ballBody.position.z);
-        const distance = landing.distanceTo(this.hitPosition);
-        const forwardDistance = this.hitPosition.z - landing.z;
-        const lateralDistance = Math.abs(landing.x - this.hitPosition.x);
-        const isFair = forwardDistance > 0 && lateralDistance <= forwardDistance;
+        const landingPosition = this.ball.getPosition();
+        landingPosition.y = 0;
+        const distance = landingPosition.distanceTo(this.hitPosition);
+        const isFair = this.field.isFair(this.hitPosition, landingPosition);
 
         if (!isFair) {
             this.statusElement.textContent = "ファウル";
@@ -340,51 +211,29 @@ class ThreeJSContainer {
         this.distanceElement.textContent = `飛距離：${distance.toFixed(1)} m`;
     };
 
-    private resetBall = () => {
+    private resetBall = (): void => {
         this.ballState = "ready";
-        this.ballBody.position.set(this.pitchStart.x, this.pitchStart.y, this.pitchStart.z);
-        this.ballBody.velocity.setZero();
-        this.ballBody.angularVelocity.setZero();
-        this.ballBody.force.setZero();
-        this.pendingHitVelocity = null;
-        this.ballBody.wakeUp();
-        this.swingActive = false;
-        this.setBatAngle(-65);
-        if (this.statusElement) this.statusElement.textContent = "Spaceキーで投球してください";
-        if (this.distanceElement) this.distanceElement.textContent = "飛距離：-- m";
+        this.ball.reset();
+        this.bat.reset();
+        if (this.statusElement) {
+            this.statusElement.textContent = "Spaceキーで投球してください";
+        }
+        if (this.distanceElement) {
+            this.distanceElement.textContent = "飛距離：-- m";
+        }
     };
 
-    private update = (delta: number) => {
-        this.updateSwing(delta);
+    private update = (delta: number): void => {
+        this.bat.update(delta);
 
-        // 投球中だけ重力を打ち消し、高さが変化しない直球にする
         if (this.ballState === "ready" || this.ballState === "pitched") {
-            this.ballBody.applyForce(
-                new CANNON.Vec3(0, 9.82 * this.ballBody.mass, 0),
-                this.ballBody.position
-            );
+            this.ball.cancelGravity();
         }
 
         this.world.step(1 / 60, delta, 4);
+        this.ball.afterPhysicsStep();
 
-        // 衝突ソルバーの計算後に打球速度を設定し、必ず外野方向へ飛ばす
-        if (this.pendingHitVelocity !== null) {
-            this.ballBody.velocity.copy(this.pendingHitVelocity);
-            this.pendingHitVelocity = null;
-        }
-        this.ballMesh.position.set(
-            this.ballBody.position.x,
-            this.ballBody.position.y,
-            this.ballBody.position.z
-        );
-        this.ballMesh.quaternion.set(
-            this.ballBody.quaternion.x,
-            this.ballBody.quaternion.y,
-            this.ballBody.quaternion.z,
-            this.ballBody.quaternion.w
-        );
-
-        if (this.ballState === "pitched" && this.ballBody.position.z > 5) {
+        if (this.ballState === "pitched" && this.ball.getPosition().z > 5) {
             this.ballState = "finished";
             this.statusElement.textContent = "ストライク（または空振り）";
         }
