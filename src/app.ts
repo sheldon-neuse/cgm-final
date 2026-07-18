@@ -17,11 +17,7 @@ class ThreeJSContainer {
     }
 
     // 画面部分の作成（表示する枠ごとに）
-    public createRendererDOM = (
-        width: number,
-        height: number,
-        cameraPos: THREE.Vector3
-    ) => {
+    public createRendererDOM = (width: number, height: number, cameraPos: THREE.Vector3) => {
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(width, height);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -63,21 +59,12 @@ class ThreeJSContainer {
         this.scene.fog = new THREE.Fog(0x87ceeb, 100, 220);
 
         // 物理演算用の空間
-        const world = new CANNON.World({
-            gravity: new CANNON.Vec3(0, -9.82, 0)
-        });
+        const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
         world.defaultContactMaterial.friction = 0.35;
         world.defaultContactMaterial.restitution = 0.45;
 
-        // ライトの設定
         this.scene.add(new THREE.HemisphereLight(0xffffff, 0x3a5f32, 1.8));
 
-        this.light = new THREE.DirectionalLight(0xffffff, 2.2);
-        this.light.position.set(-10, 18, 8);
-        this.light.castShadow = true;
-        this.scene.add(this.light);
-
-        // 球場・ボール・バットを生成
         const field = new Field(this.scene, world);
         const ball = new Ball(this.scene, world);
 
@@ -132,11 +119,7 @@ class ThreeJSContainer {
             hitPosition.y = 0;
 
             const batAngle = bat.getAngleRadians();
-            const sideDirection = THREE.MathUtils.clamp(
-                Math.sin(batAngle) * 0.35,
-                -0.35,
-                0.35
-            );
+            const sideDirection = THREE.MathUtils.clamp(Math.sin(batAngle) * 0.35, -0.35, 0.35);
             const exitSpeed = 26 + guiObj.pitchSpeed * 0.05;
 
             ball.queueHitVelocity(new CANNON.Vec3(
@@ -144,7 +127,6 @@ class ThreeJSContainer {
                 exitSpeed * 0.62,
                 -exitSpeed * 0.78
             ));
-            statusElement.textContent = "打球を追跡中…";
         };
 
         // 打球が着地したときに飛距離と結果を判定する
@@ -166,7 +148,7 @@ class ThreeJSContainer {
             distanceElement.textContent = `飛距離：${distance.toFixed(1)} m`;
         };
 
-        // ボールとバット・地面の衝突判定
+        // 衝突判定
         ball.getBody().addEventListener(
             "collide",
             (event: { body: CANNON.Body }) => {
@@ -191,6 +173,12 @@ class ThreeJSContainer {
                 bat.setBattingSide(guiObj.battingSide);
                 statusElement.textContent = `${guiObj.battingSide}に変更しました`;
             });
+
+        // ライトの設定
+        this.light = new THREE.DirectionalLight(0xffffff, 2.2);
+        this.light.position.set(-10, 18, 8);
+        this.light.castShadow = true;
+        this.scene.add(this.light);
 
         // キーボード操作
         document.addEventListener("keydown", (event) => {
@@ -221,7 +209,8 @@ class ThreeJSContainer {
 
         resetBall();
 
-        // 毎フレームupdateを呼び、物理演算結果を画面へ反映する
+        // 毎フレームのupdateを呼んで，更新
+        // reqestAnimationFrame により次フレームを呼ぶ
         const update: FrameRequestCallback = (_time) => {
             bat.update(1 / 60);
 
@@ -251,10 +240,6 @@ function init() {
     document.body.style.overflow = "hidden";
 
     const container = new ThreeJSContainer();
-    const viewport = container.createRendererDOM(
-        960,
-        640,
-        new THREE.Vector3(8, 5, 11)
-    );
+    const viewport = container.createRendererDOM(960, 640, new THREE.Vector3(8, 5, 11));
     document.body.appendChild(viewport);
 }
